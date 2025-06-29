@@ -7,7 +7,7 @@ import os
 import hashlib
 import time
 
-# Авторизация Google Sheets
+# Настройка доступа к Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("/etc/secrets/your_key.json", scope)
 client = gspread.authorize(creds)
@@ -15,7 +15,7 @@ client = gspread.authorize(creds)
 SPREADSHEET_KEY = "1qZfhq1E9CzxWv1tUUDDr4dVDfu4cZ53pEA2lESkVW1E"
 SHEET_NAME = "АДРЕСА"
 
-# Кэш
+# Память для кэша
 last_row_hashes = {}
 last_url_results = {}
 
@@ -24,7 +24,7 @@ app = Flask(__name__)
 @app.route("/")
 def map_view():
     sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
-    rows = sheet.get_all_values()[1:]
+    rows = sheet.get_all_values()[1:]  # Пропустить заголовок
 
     points = []
     processed = 0
@@ -43,7 +43,13 @@ def map_view():
             url = row[5]
             status = row[8].strip().lower()
 
-            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}"
+            photo_url = None
+            if len(row) > 9 and row[9].startswith("http"):
+                photo_url = row[9]
+            elif len(row) > 10 and row[10].startswith("http"):
+                photo_url = row[10]
+
+            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_url if photo_url else ''}"
             row_hash = hashlib.md5(row_data.encode()).hexdigest()
 
             if row_hash in last_row_hashes:
@@ -53,7 +59,7 @@ def map_view():
                 final_url = r.url
                 last_row_hashes[row_hash] = True
                 last_url_results[row_hash] = final_url
-                time.sleep(0.1)
+                time.sleep(0.1)  # Плавно, не ддосим
 
             match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
             if not match:
@@ -67,11 +73,21 @@ def map_view():
 
             color = "green" if status == "true" else "red"
 
+            info_html = (
+                f"👤 Координатор: {coordinator}<br>"
+                f"📍 Адрес: {address}<br>"
+                f"🧹 Мусор: {trash_type}<br>"
+                f"📦 Детали: {details}<br>"
+                f"🔗 <a href='{url}' target='_blank'>2ГИС</a>"
+            )
+            if photo_url:
+                info_html += f"<br>📷 <a href='{photo_url}' target='_blank'>Фото</a>"
+
             points.append({
                 "lat": lat,
                 "lng": lon,
                 "color": color,
-                "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
+                "info": info_html
             })
             processed += 1
 
@@ -89,101 +105,95 @@ def map_view():
         <title>Карта точек вывоза — Жасыл Ел</title>
         <meta charset="utf-8">
         <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo"></script>
+        <style>
+          #map { height: 600px; width: 100%; }
+          #controls { text-align: center; margin-bottom: 10px; }
+          button { padding: 6px 12px; font-size: 16px; margin-left: 10px;}
+        </style>
         <script>
         let allMarkers = [];
-        let selectedPoints = [];
-        let directionsRenderer;
+        let infoWindow = null; // единственный InfoWindow
+        let map;
+        let priorityMarkers = new Set(); // хранит индексы приоритетных меток
 
         function initMap() {
-            const map = new google.maps.Map(document.getElementById('map'), {
+            map = new google.maps.Map(document.getElementById('map'), {
                 zoom: 13,
                 center: {lat: 50.05, lng: 72.95}
             });
 
-            directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: true });
-            directionsRenderer.setMap(map);
+            infoWindow = new google.maps.InfoWindow();
 
-            const points = {{ points | safe }};
+            var points = {{ points | safe }};
 
             for (let i = 0; i < points.length; i++) {
-                let position = {lat: points[i].lat, lng: points[i].lng};
-                let marker = new google.maps.Marker({
-                    position: position,
-                    map: map,
-                    icon: {
-                        path: google.maps.SymbolPath.CIRCLE,
-                        scale: 8,
-                        fillColor: points[i].color,
-                        fillOpacity: 1,
-                        strokeWeight: 1,
-                        strokeColor: "#000"
-                    }
-                });
+                let markerColor = points[i].color;
 
-                let infowindow = new google.maps.InfoWindow({
-                    content: points[i].info
+                let marker = new google.maps.Marker({
+                    position: {lat: points[i].lat, lng: points[i].lng},
+                    map: map,
+                    icon: getMarkerIcon(markerColor),
                 });
 
                 marker.addListener('click', function() {
-                    infowindow.open(map, marker);
-
-                    const idx = selectedPoints.findIndex(p => p.lat === position.lat && p.lng === position.lng);
-                    if (idx === -1) {
-                        selectedPoints.push(position);
-                        marker.setIcon({ ...marker.getIcon(), fillColor: "#0000ff" });
+                    // Переключение приоритета
+                    if(priorityMarkers.has(i)) {
+                        priorityMarkers.delete(i);
+                        marker.setIcon(getMarkerIcon(points[i].color)); // исходный цвет
                     } else {
-                        selectedPoints.splice(idx, 1);
-                        marker.setIcon({ ...marker.getIcon(), fillColor: points[i].color });
+                        priorityMarkers.add(i);
+                        marker.setIcon(getMarkerIcon('yellow')); // жёлтый для приоритетных
                     }
+
+                    // Закрыть предыдущий инфо
+                    infoWindow.close();
+                    infoWindow.setContent(points[i].info);
+                    infoWindow.open(map, marker);
+
+                    console.log("Приоритетные точки (индексы):", Array.from(priorityMarkers));
                 });
 
-                allMarkers.push({ marker: marker, color: points[i].color });
+                allMarkers.push(marker);
             }
+        }
+
+        function getMarkerIcon(color) {
+            return {
+                path: google.maps.SymbolPath.CIRCLE,
+                scale: 8,
+                fillColor: color,
+                fillOpacity: 1,
+                strokeWeight: 1,
+                strokeColor: "#000"
+            };
         }
 
         function toggleGreenMarkers() {
             let checkbox = document.getElementById('greenToggle');
             for (let i = 0; i < allMarkers.length; i++) {
-                if (allMarkers[i].color === "green") {
-                    allMarkers[i].marker.setVisible(checkbox.checked);
+                let isGreen = allMarkers[i].getIcon().fillColor === 'green';
+                if (isGreen) {
+                    allMarkers[i].setVisible(checkbox.checked);
                 }
             }
         }
 
-        function buildManualRoute() {
-            if (selectedPoints.length < 2) {
-                alert("Выберите минимум 2 точки.");
-                return;
+        function clearRoute() {
+            // Заготовка, если будешь рисовать маршруты
+            if (typeof directionsRenderer !== "undefined" && directionsRenderer !== null) {
+                directionsRenderer.setMap(null);
+                directionsRenderer = null;
             }
-
-            const directionsService = new google.maps.DirectionsService();
-
-            const waypoints = selectedPoints.slice(1, -1).map(loc => ({ location: loc, stopover: true }));
-
-            directionsService.route({
-                origin: selectedPoints[0],
-                destination: selectedPoints[selectedPoints.length - 1],
-                waypoints: waypoints,
-                travelMode: 'DRIVING'
-            }, function(result, status) {
-                if (status === 'OK') {
-                    directionsRenderer.setDirections(result);
-                } else {
-                    alert("Ошибка построения маршрута: " + status);
-                }
-            });
         }
         </script>
     </head>
     <body onload="initMap()">
         <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
-        <div style="text-align:center; margin: 10px;">
+        <div id="controls">
             <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label>
+            <button onclick="clearRoute()">Сбросить маршрут</button>
         </div>
-        <div style="text-align:center; margin: 10px;">
-            <button onclick="buildManualRoute()">🧭 Построить маршрут вручную</button>
-        </div>
-        <div id="map" style="height: 600px; width: 100%;"></div>
+        <div id="map"></div>
     </body>
     </html>
     """
