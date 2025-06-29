@@ -3,6 +3,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import re
 import requests
+import threading
+import time
 import os
 
 # Настройка доступа к Google Sheets
@@ -14,57 +16,66 @@ SPREADSHEET_KEY = "1qZfhq1E9CzxWv1tUUDDr4dVDfu4cZ53pEA2lESkVW1E"
 SHEET_NAME = "АДРЕСА"
 
 app = Flask(__name__)
+cache_points = []
+
+def update_points():
+    global cache_points
+    while True:
+        try:
+            print("[INFO] Обновление точек...")
+            sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
+            rows = sheet.get_all_values()[1:]
+
+            new_points = []
+            for row in rows:
+                try:
+                    if len(row) < 9 or not row[5].startswith("http"):
+                        print(f"[!] Пропуск: некорректная ссылка '{row[5] if len(row) > 5 else ''}'")
+                        continue
+
+                    coordinator = row[1]
+                    address = row[2]
+                    trash_type = row[3]
+                    details = row[4]
+                    url = row[5]
+                    status = row[8].strip().lower()
+
+                    r = requests.get(url, allow_redirects=True, timeout=5)
+                    final_url = r.url
+                    print("[DEBUG] Финальная ссылка:", final_url)
+
+                    match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
+                    if not match:
+                        match = re.search(r"/([\d\.]+),([\d\.]+)", final_url.split('?')[0])
+                    if not match:
+                        print("[!] Пропуск: координаты не найдены в", final_url)
+                        continue
+
+                    lon = float(match.group(1))
+                    lat = float(match.group(2))
+
+                    color = "green" if status == "true" else "red"
+
+                    new_points.append({
+                        "lat": lat,
+                        "lng": lon,
+                        "color": color,
+                        "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
+                    })
+
+                except Exception as e:
+                    print("[!] Ошибка при обработке строки:", e)
+                    continue
+
+            cache_points = new_points
+            print(f"[+] Обновлено точек: {len(cache_points)}")
+        except Exception as e:
+            print("❌ Ошибка при обновлении:", e)
+
+        time.sleep(60)  # Обновлять каждые 60 секунд
 
 @app.route("/")
 def map_view():
-    try:
-        sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
-        rows = sheet.get_all_values()[1:]  # Пропустить заголовок
-    except Exception as e:
-        print("❌ Ошибка при подключении к Google Sheets:", e)
-        rows = []
-
-    points = []
-    for row in rows:
-        try:
-            if len(row) < 9 or not row[5].startswith("http"):
-                print(f"[!] Пропуск: некорректная ссылка '{row[5] if len(row) > 5 else ''}'")
-                continue
-
-            coordinator = row[1]
-            address = row[2]
-            trash_type = row[3]
-            details = row[4]
-            url = row[5]
-            status = row[8].strip().lower()
-
-            r = requests.get(url, allow_redirects=True, timeout=5)
-            final_url = r.url
-            print("[DEBUG] Финальная ссылка:", final_url)
-
-            match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
-            if not match:
-                match = re.search(r"/([\d\.]+),([\d\.]+)", final_url.split('?')[0])
-            if not match:
-                print("[!] Пропуск: координаты не найдены в", final_url)
-                continue
-
-            lon = float(match.group(1))
-            lat = float(match.group(2))
-
-            color = "green" if status == "true" else "red"
-
-            points.append({
-                "lat": lat,
-                "lng": lon,
-                "color": color,
-                "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
-            })
-
-        except Exception as e:
-            print("[!] Ошибка при обработке строки:", e)
-            continue
-
     html_template = """
     <!DOCTYPE html>
     <html>
@@ -128,8 +139,9 @@ def map_view():
     </body>
     </html>
     """
-    return render_template_string(html_template, points=points)
+    return render_template_string(html_template, points=cache_points)
 
 if __name__ == "__main__":
+    threading.Thread(target=update_points, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
