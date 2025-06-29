@@ -105,6 +105,7 @@ def map_view():
         let map;
         let activeInfoWindow = null;
         let priorityMarkers = [];
+        let isPrioritySelecting = false;
 
         function initMap() {
             map = new google.maps.Map(document.getElementById('map'), {
@@ -142,11 +143,11 @@ def map_view():
                     infowindow.open(map, marker);
                     activeInfoWindow = infowindow;
 
-                    if (!priorityMarkers.includes(marker)) {
+                    if (isPrioritySelecting && !priorityMarkers.includes(marker)) {
                         priorityMarkers.push(marker);
                         marker.setIcon({
                             path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-                            scale: 5,
+                            scale: 6,
                             fillColor: "#FFD700",
                             fillOpacity: 1,
                             strokeWeight: 1,
@@ -170,7 +171,7 @@ def map_view():
 
         function buildRoute() {
             if (priorityMarkers.length < 2) {
-                alert("Выберите хотя бы 2 точки.");
+                alert("Выберите хотя бы 2 приоритетные точки.");
                 return;
             }
 
@@ -204,6 +205,18 @@ def map_view():
                 strokeColor: "#000"
             }));
             priorityMarkers = [];
+            isPrioritySelecting = false;
+            document.getElementById("priorityBtn").disabled = false;
+        }
+
+        function togglePriorityMode() {
+            if (!isPrioritySelecting) {
+                alert("Выберите приоритетные адреса на карте. Повторно нажмите кнопку для подтверждения.");
+                isPrioritySelecting = true;
+            } else {
+                isPrioritySelecting = false;
+                document.getElementById("priorityBtn").disabled = true;
+            }
         }
         </script>
     </head>
@@ -211,6 +224,7 @@ def map_view():
         <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
         <div id="controls">
             <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label><br>
+            <button onclick="togglePriorityMode()" id="priorityBtn">⭐ Назначить приоритет</button>
             <button onclick="buildRoute()">📍 Построить маршрут</button>
             <button onclick="resetRoute()">🔄 Сбросить маршрут</button>
         </div>
