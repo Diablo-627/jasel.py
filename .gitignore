@@ -1,0 +1,16 @@
+# Скрыть ключ доступа
+your_key.json
+
+# Папки кэша Python
+__pycache__/
+*.pyc
+
+# Файлы/папки Visual Studio Code
+.vscode/
+
+# Логи
+*.log
+
+# Системные файлы
+.DS_Store
+Thumbs.db
