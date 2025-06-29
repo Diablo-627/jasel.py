@@ -39,10 +39,10 @@ def map_view():
             trash_type = row[3]
             details = row[4]
             url = row[5]
-            photo_url = row[6].strip()
-            status = row[9].strip().lower()
+            photo_link = row[7].strip() if len(row) > 7 else ""
+            status = row[9].strip().lower() if len(row) > 9 else ""
 
-            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_url}"
+            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_link}"
             row_hash = hashlib.md5(row_data.encode()).hexdigest()
 
             if row_hash in last_row_hashes:
@@ -67,9 +67,8 @@ def map_view():
             color = "green" if status == "true" else "red"
 
             info_html = f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
-            if photo_url:
-                # ссылка открывается в новой вкладке без перехода внутри сайта
-                info_html += f"<br>📷 <a href='{photo_url}' target='_blank' rel='noopener noreferrer'>Фото</a>"
+            if photo_link:
+                info_html += f"<br>📷 <a href='{photo_link}' target='_blank'>Фото</a>"
 
             points.append({
                 "lat": lat,
@@ -94,205 +93,223 @@ def map_view():
         <meta charset="utf-8" />
         <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo"></script>
         <style>
-            #controls {text-align: center; margin-bottom: 10px;}
-            button {margin: 0 5px; padding: 6px 12px; font-size: 14px;}
+            #map { height: 600px; width: 100%; }
+            #controls { text-align:center; margin-bottom:10px; }
+            button, label { margin: 0 5px; }
         </style>
         <script>
-        let allMarkers = [];
-        let currentInfoWindow = null;
-        let prioritySetMode = false;
-        let priorityMarkers = new Set();
-        let routeSelectionMode = false;
-        let routeSelectedMarkers = new Set();
+            let allMarkers = [];
+            let infoWindow = null;
+            let priorityMode = false;
+            let routeSelectMode = false;
+            let priorityPoints = new Set();
+            let routePoints = new Set();
+            let routePolyline = null;
+            let map;
 
-        function initMap() {
-            let map = new google.maps.Map(document.getElementById('map'), {
-                zoom: 13,
-                center: {lat: 50.05, lng: 72.95}
-            });
+            function initMap() {
+                map = new google.maps.Map(document.getElementById('map'), {
+                    zoom: 13,
+                    center: {lat: 50.05, lng: 72.95}
+                });
 
-            let points = {{ points | safe }};
+                var points = {{ points | safe }};
 
-            for (let i = 0; i < points.length; i++) {
-                let point = points[i];
-                let marker = new google.maps.Marker({
-                    position: {lat: point.lat, lng: point.lng},
-                    map: map,
-                    icon: {
+                infoWindow = new google.maps.InfoWindow();
+
+                for (let i = 0; i < points.length; i++) {
+                    let pt = points[i];
+                    let marker = new google.maps.Marker({
+                        position: {lat: pt.lat, lng: pt.lng},
+                        map: map,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            scale: 8,
+                            fillColor: pt.color,
+                            fillOpacity: 1,
+                            strokeWeight: 1,
+                            strokeColor: "#000"
+                        }
+                    });
+
+                    marker.priority = false;
+                    marker.routeSelected = false;
+                    marker.index = i;
+
+                    marker.infoContent = pt.info;
+
+                    marker.addListener('click', function() {
+                        if(priorityMode) {
+                            togglePriority(marker);
+                            return;
+                        }
+                        if(routeSelectMode) {
+                            toggleRouteSelection(marker);
+                            return;
+                        }
+                        // Close previous infoWindow and open new one
+                        infoWindow.close();
+                        infoWindow.setContent(marker.infoContent);
+                        infoWindow.open(map, marker);
+                    });
+
+                    allMarkers.push(marker);
+                }
+            }
+
+            function togglePriority(marker) {
+                if(marker.priority) {
+                    marker.priority = false;
+                    marker.setIcon({
                         path: google.maps.SymbolPath.CIRCLE,
                         scale: 8,
-                        fillColor: point.color,
+                        fillColor: marker.routeSelected ? 'blue' : 'red',
                         fillOpacity: 1,
                         strokeWeight: 1,
                         strokeColor: "#000"
-                    }
-                });
-
-                marker.priority = false;
-                marker.inRoute = false;
-                marker.defaultColor = point.color;
-
-                let infowindow = new google.maps.InfoWindow({
-                    content: point.info
-                });
-
-                marker.addListener('click', function() {
-                    if (prioritySetMode) {
-                        if (marker.priority) {
-                            marker.priority = false;
-                            marker.setIcon({
-                                path: google.maps.SymbolPath.CIRCLE,
-                                scale: 8,
-                                fillColor: marker.defaultColor,
-                                fillOpacity: 1,
-                                strokeWeight: 1,
-                                strokeColor: "#000"
-                            });
-                            priorityMarkers.delete(marker);
-                        } else {
-                            marker.priority = true;
-                            marker.setIcon({
-                                path: google.maps.SymbolPath.CIRCLE,
-                                scale: 10,
-                                fillColor: 'blue',
-                                fillOpacity: 1,
-                                strokeWeight: 2,
-                                strokeColor: "#000"
-                            });
-                            priorityMarkers.add(marker);
-                        }
-                    } else if (routeSelectionMode) {
-                        if (marker.inRoute) {
-                            marker.inRoute = false;
-                            marker.setIcon({
-                                path: google.maps.SymbolPath.CIRCLE,
-                                scale: 8,
-                                fillColor: marker.defaultColor,
-                                fillOpacity: 1,
-                                strokeWeight: 1,
-                                strokeColor: "#000"
-                            });
-                            routeSelectedMarkers.delete(marker);
-                        } else {
-                            marker.inRoute = true;
-                            marker.setIcon({
-                                path: google.maps.SymbolPath.CIRCLE,
-                                scale: 10,
-                                fillColor: 'orange',
-                                fillOpacity: 1,
-                                strokeWeight: 2,
-                                strokeColor: "#000"
-                            });
-                            routeSelectedMarkers.add(marker);
-                        }
-                    } else {
-                        if (currentInfoWindow) {
-                            currentInfoWindow.close();
-                        }
-                        infowindow.open(map, marker);
-                        currentInfoWindow = infowindow;
-                    }
-                });
-
-                allMarkers.push(marker);
-            }
-        }
-
-        function toggleGreenMarkers() {
-            let checkbox = document.getElementById('greenToggle');
-            for (let i = 0; i < allMarkers.length; i++) {
-                if (!allMarkers[i].priority && !allMarkers[i].inRoute && allMarkers[i].defaultColor === "green") {
-                    allMarkers[i].setVisible(checkbox.checked);
+                    });
+                    priorityPoints.delete(marker.index);
+                } else {
+                    marker.priority = true;
+                    marker.setIcon({
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 10,
+                        fillColor: 'orange',
+                        fillOpacity: 1,
+                        strokeWeight: 2,
+                        strokeColor: "#000"
+                    });
+                    priorityPoints.add(marker.index);
                 }
             }
-        }
 
-        function resetMap() {
-            priorityMarkers.forEach(marker => {
-                marker.priority = false;
-                marker.setIcon({
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 8,
-                    fillColor: marker.defaultColor,
-                    fillOpacity: 1,
-                    strokeWeight: 1,
-                    strokeColor: "#000"
+            function toggleRouteSelection(marker) {
+                if(marker.routeSelected) {
+                    marker.routeSelected = false;
+                    marker.setIcon({
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 8,
+                        fillColor: marker.priority ? 'orange' : 'red',
+                        fillOpacity: 1,
+                        strokeWeight: 1,
+                        strokeColor: "#000"
+                    });
+                    routePoints.delete(marker.index);
+                } else {
+                    marker.routeSelected = true;
+                    marker.setIcon({
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 8,
+                        fillColor: 'blue',
+                        fillOpacity: 1,
+                        strokeWeight: 2,
+                        strokeColor: "#000"
+                    });
+                    routePoints.add(marker.index);
+                }
+            }
+
+            function togglePriorityMode() {
+                priorityMode = !priorityMode;
+                if(priorityMode) {
+                    routeSelectMode = false;
+                    document.getElementById('priorityBtn').style.backgroundColor = '#ffa500';
+                    document.getElementById('routeSelectBtn').style.backgroundColor = '';
+                    infoWindow.close();
+                } else {
+                    document.getElementById('priorityBtn').style.backgroundColor = '';
+                }
+            }
+
+            function toggleRouteSelectionMode() {
+                routeSelectMode = !routeSelectMode;
+                if(routeSelectMode) {
+                    priorityMode = false;
+                    document.getElementById('routeSelectBtn').style.backgroundColor = '#00f';
+                    document.getElementById('priorityBtn').style.backgroundColor = '';
+                    infoWindow.close();
+                } else {
+                    document.getElementById('routeSelectBtn').style.backgroundColor = '';
+                }
+            }
+
+            function buildRoute() {
+                if(routePoints.size < 2) {
+                    alert("Выберите минимум 2 точки для маршрута");
+                    return;
+                }
+                if(routePolyline) {
+                    routePolyline.setMap(null);
+                }
+
+                let pathCoords = [];
+                routePoints.forEach(idx => {
+                    let m = allMarkers[idx];
+                    pathCoords.push(m.getPosition());
                 });
-            });
-            priorityMarkers.clear();
 
-            routeSelectedMarkers.forEach(marker => {
-                marker.inRoute = false;
-                marker.setIcon({
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 8,
-                    fillColor: marker.defaultColor,
-                    fillOpacity: 1,
-                    strokeWeight: 1,
-                    strokeColor: "#000"
+                routePolyline = new google.maps.Polyline({
+                    path: pathCoords,
+                    geodesic: true,
+                    strokeColor: '#0000FF',
+                    strokeOpacity: 0.8,
+                    strokeWeight: 4
                 });
-            });
-            routeSelectedMarkers.clear();
-
-            for (let i = 0; i < allMarkers.length; i++) {
-                allMarkers[i].setVisible(true);
+                routePolyline.setMap(map);
             }
 
-            prioritySetMode = false;
-            routeSelectionMode = false;
-            document.getElementById('priorityBtn').innerText = 'Назначить приоритет';
-            document.getElementById('routeSelectBtn').innerText = 'Выбрать точки маршрута';
-        }
-
-        function togglePriorityMode() {
-            prioritySetMode = !prioritySetMode;
-            if (prioritySetMode) {
-                routeSelectionMode = false;
-                document.getElementById('priorityBtn').innerText = 'Завершить назначение приоритета';
-                document.getElementById('routeSelectBtn').innerText = 'Выбрать точки маршрута';
-                alert("Кликните на метки, чтобы назначить или снять приоритет.");
-            } else {
-                document.getElementById('priorityBtn').innerText = 'Назначить приоритет';
-                alert("Приоритетные точки сохранены. Вы можете строить маршрут.");
+            function resetMap() {
+                infoWindow.close();
+                priorityMode = false;
+                routeSelectMode = false;
+                document.getElementById('priorityBtn').style.backgroundColor = '';
+                document.getElementById('routeSelectBtn').style.backgroundColor = '';
+                if(routePolyline) {
+                    routePolyline.setMap(null);
+                    routePolyline = null;
+                }
+                priorityPoints.clear();
+                routePoints.clear();
+                allMarkers.forEach(marker => {
+                    marker.priority = false;
+                    marker.routeSelected = false;
+                    marker.setIcon({
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 8,
+                        fillColor: 'red',
+                        fillOpacity: 1,
+                        strokeWeight: 1,
+                        strokeColor: "#000"
+                    });
+                });
             }
-        }
 
-        function toggleRouteSelectionMode() {
-            routeSelectionMode = !routeSelectionMode;
-            if (routeSelectionMode) {
-                prioritySetMode = false;
-                document.getElementById('routeSelectBtn').innerText = 'Завершить выбор маршрута';
-                document.getElementById('priorityBtn').innerText = 'Назначить приоритет';
-                alert("Кликните на метки, чтобы выбрать или снять их для маршрута.");
-            } else {
-                document.getElementById('routeSelectBtn').innerText = 'Выбрать точки маршрута';
-                alert("Точки маршрута выбраны. Теперь нажмите «Построить маршрут».");
+            function toggleGreenMarkers() {
+                let checkbox = document.getElementById('greenToggle');
+                allMarkers.forEach(marker => {
+                    if(marker.priority) return; // priority always visible
+                    if(marker.routeSelected) return; // route selected always visible
+                    if(marker.getIcon().fillColor === "green" || marker.getIcon().fillColor === "#008000") {
+                        marker.setVisible(checkbox.checked);
+                    }
+                });
             }
-        }
-
-        function buildRoute() {
-            let selectedMarkers = Array.from(routeSelectedMarkers).filter(m => m.getVisible());
-            if (selectedMarkers.length < 2) {
-                alert("Выберите минимум 2 точки для построения маршрута.");
-                return;
-            }
-            alert("Маршрут строится для выбранных точек (демо).");
-        }
         </script>
     </head>
     <body onload="initMap()">
         <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
-        <div id="controls">
+        <div id="controls" style="text-align:center; margin-bottom:10px;">
             <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label>
             <button id="priorityBtn" onclick="togglePriorityMode()">Назначить приоритет</button>
             <button id="routeSelectBtn" onclick="toggleRouteSelectionMode()">Выбрать точки маршрута</button>
             <button onclick="buildRoute()">Построить маршрут</button>
             <button onclick="resetMap()">Сбросить</button>
         </div>
-        <div id="map" style="height: 600px; width: 100%;"></div>
+        <div id="map"></div>
     </body>
     </html>
     """
+
     return render_template_string(html_template, points=points)
 
 if __name__ == "__main__":
