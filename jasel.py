@@ -41,7 +41,7 @@ def map_view():
             trash_type = row[3]
             details = row[4]
             url = row[5]
-            status = row[8].strip().lower()
+            status = row[9].strip().lower()
 
             photo_url = None
             if len(row) > 9 and row[9].startswith("http"):
