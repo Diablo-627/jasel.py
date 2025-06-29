@@ -7,7 +7,6 @@ import os
 import hashlib
 import time
 
-# Настройка доступа к Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("/etc/secrets/your_key.json", scope)
 client = gspread.authorize(creds)
@@ -15,7 +14,6 @@ client = gspread.authorize(creds)
 SPREADSHEET_KEY = "1qZfhq1E9CzxWv1tUUDDr4dVDfu4cZ53pEA2lESkVW1E"
 SHEET_NAME = "АДРЕСА"
 
-# Память для кэша
 last_row_hashes = {}
 last_url_results = {}
 
@@ -24,7 +22,7 @@ app = Flask(__name__)
 @app.route("/")
 def map_view():
     sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
-    rows = sheet.get_all_values()[1:]  # Пропустить заголовок
+    rows = sheet.get_all_values()[1:]
 
     points = []
     processed = 0
@@ -41,15 +39,9 @@ def map_view():
             trash_type = row[3]
             details = row[4]
             url = row[5]
-            status = row[9].strip().lower()
+            status = row[8].strip().lower()
 
-            photo_url = None
-            if len(row) > 9 and row[9].startswith("http"):
-                photo_url = row[9]
-            elif len(row) > 10 and row[10].startswith("http"):
-                photo_url = row[10]
-
-            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_url if photo_url else ''}"
+            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}"
             row_hash = hashlib.md5(row_data.encode()).hexdigest()
 
             if row_hash in last_row_hashes:
@@ -59,7 +51,7 @@ def map_view():
                 final_url = r.url
                 last_row_hashes[row_hash] = True
                 last_url_results[row_hash] = final_url
-                time.sleep(0.1)  # Плавно, не ддосим
+                time.sleep(0.1)
 
             match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
             if not match:
@@ -73,21 +65,11 @@ def map_view():
 
             color = "green" if status == "true" else "red"
 
-            info_html = (
-                f"👤 Координатор: {coordinator}<br>"
-                f"📍 Адрес: {address}<br>"
-                f"🧹 Мусор: {trash_type}<br>"
-                f"📦 Детали: {details}<br>"
-                f"🔗 <a href='{url}' target='_blank'>2ГИС</a>"
-            )
-            if photo_url:
-                info_html += f"<br>📷 <a href='{photo_url}' target='_blank'>Фото</a>"
-
             points.append({
                 "lat": lat,
                 "lng": lon,
                 "color": color,
-                "info": info_html
+                "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
             })
             processed += 1
 
@@ -104,17 +86,25 @@ def map_view():
     <head>
         <title>Карта точек вывоза — Жасыл Ел</title>
         <meta charset="utf-8">
-        <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo"></script>
         <style>
-          #map { height: 600px; width: 100%; }
-          #controls { text-align: center; margin-bottom: 10px; }
-          button { padding: 6px 12px; font-size: 16px; margin-left: 10px;}
+            #controls {
+                text-align: center;
+                margin: 10px;
+            }
+            button {
+                margin: 5px;
+                padding: 8px 12px;
+                font-size: 14px;
+            }
         </style>
+        <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo&libraries=places"></script>
         <script>
         let allMarkers = [];
-        let infoWindow = null; // единственный InfoWindow
+        let directionsRenderer;
+        let directionsService;
         let map;
-        let priorityMarkers = new Set(); // хранит индексы приоритетных меток
+        let activeInfoWindow = null;
+        let priorityMarkers = [];
 
         function initMap() {
             map = new google.maps.Map(document.getElementById('map'), {
@@ -122,78 +112,109 @@ def map_view():
                 center: {lat: 50.05, lng: 72.95}
             });
 
-            infoWindow = new google.maps.InfoWindow();
+            directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer({ map: map });
 
             var points = {{ points | safe }};
 
             for (let i = 0; i < points.length; i++) {
-                let markerColor = points[i].color;
-
                 let marker = new google.maps.Marker({
                     position: {lat: points[i].lat, lng: points[i].lng},
                     map: map,
-                    icon: getMarkerIcon(markerColor),
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 8,
+                        fillColor: points[i].color,
+                        fillOpacity: 1,
+                        strokeWeight: 1,
+                        strokeColor: "#000"
+                    }
+                });
+
+                let infowindow = new google.maps.InfoWindow({
+                    content: points[i].info
                 });
 
                 marker.addListener('click', function() {
-                    // Переключение приоритета
-                    if(priorityMarkers.has(i)) {
-                        priorityMarkers.delete(i);
-                        marker.setIcon(getMarkerIcon(points[i].color)); // исходный цвет
-                    } else {
-                        priorityMarkers.add(i);
-                        marker.setIcon(getMarkerIcon('yellow')); // жёлтый для приоритетных
+                    if (activeInfoWindow) {
+                        activeInfoWindow.close();
                     }
+                    infowindow.open(map, marker);
+                    activeInfoWindow = infowindow;
 
-                    // Закрыть предыдущий инфо
-                    infoWindow.close();
-                    infoWindow.setContent(points[i].info);
-                    infoWindow.open(map, marker);
-
-                    console.log("Приоритетные точки (индексы):", Array.from(priorityMarkers));
+                    if (!priorityMarkers.includes(marker)) {
+                        priorityMarkers.push(marker);
+                        marker.setIcon({
+                            path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
+                            scale: 5,
+                            fillColor: "#FFD700",
+                            fillOpacity: 1,
+                            strokeWeight: 1,
+                            strokeColor: "#000"
+                        });
+                    }
                 });
 
-                allMarkers.push(marker);
+                allMarkers.push({ marker: marker, color: points[i].color });
             }
-        }
-
-        function getMarkerIcon(color) {
-            return {
-                path: google.maps.SymbolPath.CIRCLE,
-                scale: 8,
-                fillColor: color,
-                fillOpacity: 1,
-                strokeWeight: 1,
-                strokeColor: "#000"
-            };
         }
 
         function toggleGreenMarkers() {
             let checkbox = document.getElementById('greenToggle');
             for (let i = 0; i < allMarkers.length; i++) {
-                let isGreen = allMarkers[i].getIcon().fillColor === 'green';
-                if (isGreen) {
-                    allMarkers[i].setVisible(checkbox.checked);
+                if (allMarkers[i].color === "green") {
+                    allMarkers[i].marker.setVisible(checkbox.checked);
                 }
             }
         }
 
-        function clearRoute() {
-            // Заготовка, если будешь рисовать маршруты
-            if (typeof directionsRenderer !== "undefined" && directionsRenderer !== null) {
-                directionsRenderer.setMap(null);
-                directionsRenderer = null;
+        function buildRoute() {
+            if (priorityMarkers.length < 2) {
+                alert("Выберите хотя бы 2 точки.");
+                return;
             }
+
+            let waypoints = priorityMarkers.slice(1, -1).map(m => ({
+                location: m.getPosition(),
+                stopover: true
+            }));
+
+            directionsService.route({
+                origin: priorityMarkers[0].getPosition(),
+                destination: priorityMarkers[priorityMarkers.length - 1].getPosition(),
+                waypoints: waypoints,
+                travelMode: google.maps.TravelMode.DRIVING
+            }, function(result, status) {
+                if (status === 'OK') {
+                    directionsRenderer.setDirections(result);
+                } else {
+                    alert('Ошибка построения маршрута: ' + status);
+                }
+            });
+        }
+
+        function resetRoute() {
+            directionsRenderer.setDirections({ routes: [] });
+            priorityMarkers.forEach(m => m.setIcon({
+                path: google.maps.SymbolPath.CIRCLE,
+                scale: 8,
+                fillColor: "blue",
+                fillOpacity: 1,
+                strokeWeight: 1,
+                strokeColor: "#000"
+            }));
+            priorityMarkers = [];
         }
         </script>
     </head>
     <body onload="initMap()">
         <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
         <div id="controls">
-            <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label>
-            <button onclick="clearRoute()">Сбросить маршрут</button>
+            <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label><br>
+            <button onclick="buildRoute()">📍 Построить маршрут</button>
+            <button onclick="resetRoute()">🔄 Сбросить маршрут</button>
         </div>
-        <div id="map"></div>
+        <div id="map" style="height: 600px; width: 100%;"></div>
     </body>
     </html>
     """
