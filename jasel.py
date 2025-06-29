@@ -3,6 +3,9 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import re
 import requests
+import threading
+import time
+import os
 
 # Настройка доступа к Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -14,55 +17,73 @@ SHEET_NAME = "АДРЕСА"
 
 app = Flask(__name__)
 
+# Кэш для точек
+cache_points = []
+cache_lock = threading.Lock()
+
+
+def update_points():
+    global cache_points
+    while True:
+        try:
+            sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
+            rows = sheet.get_all_values()[1:]  # Пропустить заголовок
+            new_points = []
+
+            for row in rows:
+                try:
+                    if len(row) < 9 or not row[5].startswith("http"):
+                        continue
+
+                    coordinator = row[1]
+                    address = row[2]
+                    trash_type = row[3]
+                    details = row[4]
+                    url = row[5]
+                    status = row[8].strip().lower()
+
+                    try:
+                        r = requests.get(url, allow_redirects=True, timeout=3)
+                        final_url = r.url
+                    except Exception as e:
+                        print("[!] Ошибка запроса:", url, "\n", e)
+                        continue
+
+                    match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
+                    if not match:
+                        match = re.search(r"/([\d\.]+),([\d\.]+)", final_url.split('?')[0])
+                    if not match:
+                        continue
+
+                    lon = float(match.group(1))
+                    lat = float(match.group(2))
+
+                    color = "green" if status == "true" else "red"
+
+                    new_points.append({
+                        "lat": lat,
+                        "lng": lon,
+                        "color": color,
+                        "info": f"\ud83d\udc64 Координатор: {coordinator}<br>\ud83d\udccd Адрес: {address}<br>\ud83e\uddf9 Мусор: {trash_type}<br>\ud83d\udce6 Детали: {details}<br>\ud83d\udd17 <a href='{url}' target='_blank'>2ГИС</a>"
+                    })
+                except Exception as inner:
+                    print("[!] Ошибка строки:", inner)
+
+            with cache_lock:
+                cache_points = new_points
+                print("[+] Обновлено точек:", len(cache_points))
+
+        except Exception as e:
+            print("[!] Ошибка обновления cache_points:", e)
+
+        time.sleep(60)  # Обновлять раз в минуту
+
+
 @app.route("/")
 def map_view():
-    sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
-    rows = sheet.get_all_values()[1:]  # Пропустить заголовок
+    with cache_lock:
+        points = list(cache_points)
 
-    points = []
-    for row in rows:
-        try:
-            # Проверка наличия всех нужных ячеек
-            if len(row) < 9 or not row[5].startswith("http"):
-                print(f"[!] Пропуск: некорректная ссылка '{row[5] if len(row) > 5 else ''}'")
-                continue
-
-            coordinator = row[1]
-            address = row[2]
-            trash_type = row[3]
-            details = row[4]
-            url = row[5]
-            status = row[8].strip().lower()
-
-            # Получаем финальную ссылку (редирект)
-            r = requests.get(url, allow_redirects=True)
-            final_url = r.url
-            print("[DEBUG] Финальная ссылка:", final_url)
-
-            # Извлекаем координаты: сначала через m=, если нет — через окончание /lat,lon
-            match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
-            if not match:
-                match = re.search(r"/([\d\.]+),([\d\.]+)", final_url.split('?')[0])
-            if not match:
-                print("[!] Пропуск: координаты не найдены в", final_url)
-                continue
-
-            lon = float(match.group(1))
-            lat = float(match.group(2))
-
-            color = "green" if status == "true" else "red"
-
-            points.append({
-                "lat": lat,
-                "lng": lon,
-                "color": color,
-                "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
-            })
-        except Exception as e:
-            print("[!] Ошибка при обработке строки:", e)
-            continue
-
-    # HTML-шаблон с чекбоксом для скрытия зелёных точек
     html_template = """
     <!DOCTYPE html>
     <html>
@@ -118,7 +139,7 @@ def map_view():
         </script>
     </head>
     <body onload="initMap()">
-        <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
+        <h2 style="text-align:center;">🗌 Карта точек вывоза (Жасыл Ел)</h2>
         <div style="text-align:center; margin-bottom: 10px;">
             <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label>
         </div>
@@ -128,7 +149,8 @@ def map_view():
     """
     return render_template_string(html_template, points=points)
 
+
 if __name__ == "__main__":
-    import os
+    threading.Thread(target=update_points, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
