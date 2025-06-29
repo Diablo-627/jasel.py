@@ -30,7 +30,7 @@ def map_view():
 
     for row in rows:
         try:
-            if len(row) < 9 or not row[5].startswith("http"):
+            if len(row) < 10 or not row[5].startswith("http"):
                 skipped += 1
                 continue
 
@@ -86,42 +86,31 @@ def map_view():
     <head>
         <title>Карта точек вывоза — Жасыл Ел</title>
         <meta charset="utf-8">
-        <style>
-            #controls {
-                text-align: center;
-                margin: 10px;
-            }
-            button {
-                margin: 5px;
-                padding: 8px 12px;
-                font-size: 14px;
-            }
-        </style>
         <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo&libraries=places"></script>
         <script>
         let allMarkers = [];
-        let directionsRenderer;
-        let directionsService;
-        let map;
-        let activeInfoWindow = null;
-        let priorityMarkers = [];
         let routeMarkers = [];
+        let priorityMarkers = [];
         let isPrioritySelecting = false;
         let isRouteSelecting = false;
+        let directionsService;
+        let directionsRenderer;
+        let currentInfoWindow;
 
         function initMap() {
-            map = new google.maps.Map(document.getElementById('map'), {
+            const map = new google.maps.Map(document.getElementById('map'), {
                 zoom: 13,
                 center: {lat: 50.05, lng: 72.95}
             });
 
             directionsService = new google.maps.DirectionsService();
-            directionsRenderer = new google.maps.DirectionsRenderer({ map: map });
+            directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: true });
+            directionsRenderer.setMap(map);
 
-            var points = {{ points | safe }};
+            const points = {{ points | safe }};
 
             for (let i = 0; i < points.length; i++) {
-                let marker = new google.maps.Marker({
+                const marker = new google.maps.Marker({
                     position: {lat: points[i].lat, lng: points[i].lng},
                     map: map,
                     icon: {
@@ -134,131 +123,127 @@ def map_view():
                     }
                 });
 
-                let infowindow = new google.maps.InfoWindow({
+                const infowindow = new google.maps.InfoWindow({
                     content: points[i].info
                 });
 
-                marker.addListener('click', function() {
-                    if (activeInfoWindow) activeInfoWindow.close();
+                marker.addListener('click', () => {
+                    if (currentInfoWindow) currentInfoWindow.close();
                     infowindow.open(map, marker);
-                    activeInfoWindow = infowindow;
+                    currentInfoWindow = infowindow;
 
-                    if (isPrioritySelecting && !priorityMarkers.includes(marker)) {
-                        priorityMarkers.push(marker);
-                        marker.setIcon({
-                            path: google.maps.SymbolPath.BACKWARD_CLOSED_ARROW,
-                            scale: 6,
-                            fillColor: "#FFD700",
-                            fillOpacity: 1,
-                            strokeWeight: 1,
-                            strokeColor: "#000"
-                        });
-                    } else if (isRouteSelecting && !routeMarkers.includes(marker)) {
-                        routeMarkers.push(marker);
-                        marker.setIcon({
-                            path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-                            scale: 6,
-                            fillColor: "#00CED1",
-                            fillOpacity: 1,
-                            strokeWeight: 1,
-                            strokeColor: "#000"
-                        });
+                    if (isPrioritySelecting) {
+                        if (!priorityMarkers.includes(marker)) {
+                            priorityMarkers.push(marker);
+                            marker.setIcon({
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 10,
+                                fillColor: "blue",
+                                fillOpacity: 1,
+                                strokeWeight: 1,
+                                strokeColor: "#000"
+                            });
+                        }
+                    } else if (isRouteSelecting) {
+                        if (!routeMarkers.includes(marker)) {
+                            routeMarkers.push(marker);
+                            marker.setIcon({
+                                path: google.maps.SymbolPath.CIRCLE,
+                                scale: 10,
+                                fillColor: "orange",
+                                fillOpacity: 1,
+                                strokeWeight: 1,
+                                strokeColor: "#000"
+                            });
+                        }
                     }
                 });
 
-                allMarkers.push({ marker: marker, color: points[i].color });
+                allMarkers.push({ marker: marker, color: points[i].color, defaultColor: points[i].color });
             }
         }
 
         function toggleGreenMarkers() {
-            let checkbox = document.getElementById('greenToggle');
-            for (let i = 0; i < allMarkers.length; i++) {
-                if (allMarkers[i].color === "green") {
-                    allMarkers[i].marker.setVisible(checkbox.checked);
+            const checkbox = document.getElementById('greenToggle');
+            allMarkers.forEach(obj => {
+                if (obj.color === "green") {
+                    obj.marker.setVisible(checkbox.checked);
                 }
-            }
+            });
         }
 
-        function togglePriorityMode() {
-            if (!isPrioritySelecting) {
-                alert("Выберите приоритетные адреса. Повторно нажмите кнопку для завершения.");
-                isPrioritySelecting = true;
-            } else {
-                isPrioritySelecting = false;
-                document.getElementById("priorityBtn").disabled = true;
-            }
-        }
-
-        function toggleRouteMode() {
+        function buildRoute() {
             if (!isRouteSelecting) {
-                alert("Выберите точки маршрута (минимум 2). Затем нажмите снова.");
+                alert("Выберите минимум 2 точки на карте, затем снова нажмите 'Построить маршрут'");
                 isRouteSelecting = true;
-            } else {
-                isRouteSelecting = false;
-                if (routeMarkers.length < 2) {
-                    alert("Нужно минимум 2 точки для маршрута!");
-                    return;
-                }
-
-                let waypoints = routeMarkers.slice(1, -1).map(m => ({
-                    location: m.getPosition(),
-                    stopover: true
-                }));
-
-                directionsService.route({
-                    origin: routeMarkers[0].getPosition(),
-                    destination: routeMarkers[routeMarkers.length - 1].getPosition(),
-                    waypoints: waypoints,
-                    travelMode: google.maps.TravelMode.DRIVING
-                }, function(result, status) {
-                    if (status === 'OK') {
-                        directionsRenderer.setDirections(result);
-                    } else {
-                        alert('Ошибка построения маршрута: ' + status);
-                    }
-                });
-
-                document.getElementById("routeBtn").disabled = true;
+                return;
             }
+
+            if (routeMarkers.length < 2) {
+                alert("Выберите минимум 2 точки!");
+                return;
+            }
+
+            const waypoints = routeMarkers.slice(1, -1).map(m => ({
+                location: m.getPosition(),
+                stopover: true
+            }));
+
+            directionsService.route({
+                origin: routeMarkers[0].getPosition(),
+                destination: routeMarkers[routeMarkers.length - 1].getPosition(),
+                waypoints: waypoints,
+                travelMode: 'DRIVING'
+            }, (response, status) => {
+                if (status === 'OK') {
+                    directionsRenderer.setDirections(response);
+                } else {
+                    alert('Ошибка построения маршрута: ' + status);
+                }
+            });
+
+            isRouteSelecting = false;
+        }
+
+        function startPrioritySelection() {
+            if (!isPrioritySelecting) {
+                alert("Выберите приоритетные точки, затем снова нажмите кнопку");
+                isPrioritySelecting = true;
+                return;
+            }
+            isPrioritySelecting = false;
         }
 
         function resetRoute() {
             directionsRenderer.setDirections({ routes: [] });
 
-            priorityMarkers.forEach(m => m.setIcon({
-                path: google.maps.SymbolPath.CIRCLE,
-                scale: 8,
-                fillColor: "blue",
-                fillOpacity: 1,
-                strokeWeight: 1,
-                strokeColor: "#000"
-            }));
-
-            routeMarkers.forEach(m => m.setIcon({
-                path: google.maps.SymbolPath.CIRCLE,
-                scale: 8,
-                fillColor: "blue",
-                fillOpacity: 1,
-                strokeWeight: 1,
-                strokeColor: "#000"
-            }));
+            allMarkers.forEach(obj => {
+                obj.marker.setIcon({
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: 8,
+                    fillColor: obj.defaultColor,
+                    fillOpacity: 1,
+                    strokeWeight: 1,
+                    strokeColor: "#000"
+                });
+            });
 
             priorityMarkers = [];
             routeMarkers = [];
             isPrioritySelecting = false;
             isRouteSelecting = false;
-            document.getElementById("priorityBtn").disabled = false;
-            document.getElementById("routeBtn").disabled = false;
         }
         </script>
     </head>
     <body onload="initMap()">
         <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
-        <div id="controls">
-            <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label><br>
-            <button onclick="togglePriorityMode()" id="priorityBtn">⭐ Назначить приоритет</button>
-            <button onclick="toggleRouteMode()" id="routeBtn">📍 Построить маршрут</button>
-            <button onclick="resetRoute()">🔄 Сбросить всё</button>
+        <div style="text-align:center; margin-bottom: 10px;">
+            <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки</label>
+        </div>
+        <div style="text-align:center; margin-bottom: 10px;">
+            <button onclick="startPrioritySelection()" id="priorityBtn">Назначить приоритет</button>
+            <button onclick="buildRoute()" id="routeBtn">Построить маршрут</button>
+            <button onclick="resetRoute()">Сбросить</button>
         </div>
         <div id="map" style="height: 600px; width: 100%;"></div>
     </body>
