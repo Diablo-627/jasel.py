@@ -6,7 +6,7 @@ import requests
 
 # Настройка доступа к Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("your_key.json", scope)
+creds = ServiceAccountCredentials.from_json_keyfile_name("/etc/secrets/your_key.json", scope)
 client = gspread.authorize(creds)
 
 SPREADSHEET_KEY = "1qZfhq1E9CzxWv1tUUDDr4dVDfu4cZ53pEA2lESkVW1E"
