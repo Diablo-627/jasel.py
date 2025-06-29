@@ -4,6 +4,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 import re
 import requests
 import os
+import hashlib
+import time
 
 # Настройка доступа к Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -13,143 +15,137 @@ client = gspread.authorize(creds)
 SPREADSHEET_KEY = "1qZfhq1E9CzxWv1tUUDDr4dVDfu4cZ53pEA2lESkVW1E"
 SHEET_NAME = "АДРЕСА"
 
+# Память для кэша
+last_row_hashes = {}
+last_url_results = {}
+
 app = Flask(__name__)
-cache_points = []
-
-def update_points_once():
-    global cache_points
-    print("[INFO] Обновление точек с Google Sheets...")
-    try:
-        sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
-        rows = sheet.get_all_values()[1:]  # Пропустить заголовок
-
-        new_points = []
-        total_rows = len(rows)
-        valid_rows = 0
-        for row in rows:
-            try:
-                if len(row) < 9:
-                    continue
-
-                if not row[1] and not row[2] and not row[3]:
-                    continue  # полностью пустая строка
-
-                valid_rows += 1
-
-                if not row[5].startswith("http"):
-                    print(f"[!] Пропуск: некорректная ссылка '{row[5]}'")
-                    continue
-
-                coordinator = row[1]
-                address = row[2]
-                trash_type = row[3]
-                details = row[4]
-                url = row[5]
-                status = row[8].strip().lower()
-
-                r = requests.get(url, allow_redirects=True, timeout=5)
-                final_url = r.url
-
-                match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
-                if not match:
-                    match = re.search(r"/([\d\.]+),([\d\.]+)", final_url.split('?')[0])
-                if not match:
-                    print(f"[!] Пропуск: координаты не найдены в {final_url}")
-                    continue
-
-                lon = float(match.group(1))
-                lat = float(match.group(2))
-
-                color = "green" if status == "true" else "red"
-
-                new_points.append({
-                    "lat": lat,
-                    "lng": lon,
-                    "color": color,
-                    "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
-                })
-            except Exception as e:
-                print("[!] Ошибка при обработке строки:", row)
-                print("    Причина:", e)
-                continue
-
-        cache_points = new_points
-        print(f"[✓] Прочитано строк: {total_rows}, валидных строк: {valid_rows}, добавлено точек: {len(cache_points)}")
-    except Exception as e:
-        print("[X] Ошибка при загрузке Google Sheets:", e)
-
-# HTML-шаблон с чекбоксом
-html_template = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Карта точек вывоза — Жасыл Ел</title>
-    <meta charset="utf-8">
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo"></script>
-    <script>
-    let allMarkers = [];
-
-    function initMap() {
-        var map = new google.maps.Map(document.getElementById('map'), {
-            zoom: 13,
-            center: {lat: 50.05, lng: 72.95}
-        });
-
-        var points = {{ points | safe }};
-
-        for (let i = 0; i < points.length; i++) {
-            let marker = new google.maps.Marker({
-                position: {lat: points[i].lat, lng: points[i].lng},
-                map: map,
-                icon: {
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 8,
-                    fillColor: points[i].color,
-                    fillOpacity: 1,
-                    strokeWeight: 1,
-                    strokeColor: "#000"
-                }
-            });
-
-            let infowindow = new google.maps.InfoWindow({
-                content: points[i].info
-            });
-
-            marker.addListener('click', function() {
-                infowindow.open(map, marker);
-            });
-
-            allMarkers.push({ marker: marker, color: points[i].color });
-        }
-    }
-
-    function toggleGreenMarkers() {
-        let checkbox = document.getElementById('greenToggle');
-        for (let i = 0; i < allMarkers.length; i++) {
-            if (allMarkers[i].color === "green") {
-                allMarkers[i].marker.setVisible(checkbox.checked);
-            }
-        }
-    }
-    </script>
-</head>
-<body onload="initMap()">
-    <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
-    <div style="text-align:center; margin-bottom: 10px;">
-        <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label>
-    </div>
-    <div id="map" style="height: 600px; width: 100%;"></div>
-</body>
-</html>
-"""
 
 @app.route("/")
 def map_view():
-    print(f"[INFO] Карта запрошена. Всего точек: {len(cache_points)}")
-    return render_template_string(html_template, points=cache_points)
+    sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
+    rows = sheet.get_all_values()[1:]  # Пропустить заголовок
 
-# Вызываем при запуске
-update_points_once()
+    points = []
+    processed = 0
+    skipped = 0
+
+    for row in rows:
+        try:
+            if len(row) < 9 or not row[5].startswith("http"):
+                skipped += 1
+                continue
+
+            coordinator = row[1]
+            address = row[2]
+            trash_type = row[3]
+            details = row[4]
+            url = row[5]
+            status = row[8].strip().lower()
+
+            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}"
+            row_hash = hashlib.md5(row_data.encode()).hexdigest()
+
+            if row_hash in last_row_hashes:
+                final_url = last_url_results[row_hash]
+            else:
+                r = requests.get(url, allow_redirects=True, timeout=5)
+                final_url = r.url
+                last_row_hashes[row_hash] = True
+                last_url_results[row_hash] = final_url
+                time.sleep(0.1)  # Плавно, не ддосим
+
+            match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
+            if not match:
+                match = re.search(r"/([\d\.]+),([\d\.]+)", final_url.split('?')[0])
+            if not match:
+                skipped += 1
+                continue
+
+            lon = float(match.group(1))
+            lat = float(match.group(2))
+
+            color = "green" if status == "true" else "red"
+
+            points.append({
+                "lat": lat,
+                "lng": lon,
+                "color": color,
+                "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
+            })
+            processed += 1
+
+        except Exception as e:
+            print("[!] Ошибка:", e)
+            skipped += 1
+            continue
+
+    print(f"[INFO] Карта запрошена. Всего строк: {len(rows)} | Успешных точек: {processed} | Пропущено: {skipped}")
+
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Карта точек вывоза — Жасыл Ел</title>
+        <meta charset="utf-8">
+        <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo"></script>
+        <script>
+        let allMarkers = [];
+
+        function initMap() {
+            var map = new google.maps.Map(document.getElementById('map'), {
+                zoom: 13,
+                center: {lat: 50.05, lng: 72.95}
+            });
+
+            var points = {{ points | safe }};
+
+            for (let i = 0; i < points.length; i++) {
+                let marker = new google.maps.Marker({
+                    position: {lat: points[i].lat, lng: points[i].lng},
+                    map: map,
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 8,
+                        fillColor: points[i].color,
+                        fillOpacity: 1,
+                        strokeWeight: 1,
+                        strokeColor: "#000"
+                    }
+                });
+
+                let infowindow = new google.maps.InfoWindow({
+                    content: points[i].info
+                });
+
+                marker.addListener('click', function() {
+                    infowindow.open(map, marker);
+                });
+
+                allMarkers.push({ marker: marker, color: points[i].color });
+            }
+        }
+
+        function toggleGreenMarkers() {
+            let checkbox = document.getElementById('greenToggle');
+            for (let i = 0; i < allMarkers.length; i++) {
+                if (allMarkers[i].color === "green") {
+                    allMarkers[i].marker.setVisible(checkbox.checked);
+                }
+            }
+        }
+        </script>
+    </head>
+    <body onload="initMap()">
+        <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
+        <div style="text-align:center; margin-bottom: 10px;">
+            <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label>
+        </div>
+        <div id="map" style="height: 600px; width: 100%;"></div>
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, points=points)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
