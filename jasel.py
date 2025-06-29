@@ -68,7 +68,8 @@ def map_view():
 
             info_html = f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
             if photo_url:
-                info_html += f"<br>📷 <a href='{photo_url}' target='_blank'>Фото</a>"
+                # ссылка открывается в новой вкладке без перехода внутри сайта
+                info_html += f"<br>📷 <a href='{photo_url}' target='_blank' rel='noopener noreferrer'>Фото</a>"
 
             points.append({
                 "lat": lat,
@@ -90,7 +91,7 @@ def map_view():
     <html>
     <head>
         <title>Карта точек вывоза — Жасыл Ел</title>
-        <meta charset="utf-8">
+        <meta charset="utf-8" />
         <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo"></script>
         <style>
             #controls {text-align: center; margin-bottom: 10px;}
