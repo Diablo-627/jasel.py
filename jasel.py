@@ -1,11 +1,10 @@
 from flask import Flask, render_template_string
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import threading
 import re
 import requests
-import threading
 import time
-import os
 
 # Настройка доступа к Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -21,15 +20,14 @@ cache_points = []
 def update_points_once():
     global cache_points
     try:
-        print("[INFO] Первичное обновление точек...")
+        print("[INFO] Обновление точек с Google Sheets...")
         sheet = client.open_by_key(SPREADSHEET_KEY).worksheet(SHEET_NAME)
-        rows = sheet.get_all_values()[1:]
+        rows = sheet.get_all_values()[1:]  # Пропустить заголовок
 
-        new_points = []
+        points = []
         for row in rows:
             try:
                 if len(row) < 9 or not row[5].startswith("http"):
-                    print(f"[!] Пропуск: некорректная ссылка '{row[5] if len(row) > 5 else ''}'")
                     continue
 
                 coordinator = row[1]
@@ -41,43 +39,40 @@ def update_points_once():
 
                 r = requests.get(url, allow_redirects=True, timeout=5)
                 final_url = r.url
-                print("[DEBUG] Финальная ссылка:", final_url)
 
                 match = re.search(r"m=([\d\.]+)[,%]([\d\.]+)", final_url)
                 if not match:
                     match = re.search(r"/([\d\.]+),([\d\.]+)", final_url.split('?')[0])
                 if not match:
-                    print("[!] Пропуск: координаты не найдены в", final_url)
                     continue
 
                 lon = float(match.group(1))
                 lat = float(match.group(2))
-
                 color = "green" if status == "true" else "red"
 
-                new_points.append({
+                points.append({
                     "lat": lat,
                     "lng": lon,
                     "color": color,
                     "info": f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
                 })
-
             except Exception as e:
                 print("[!] Ошибка при обработке строки:", e)
                 continue
 
-        cache_points = new_points
-        print(f"[+] Первичное обновление завершено. Всего точек: {len(cache_points)}")
+        cache_points = points
+        print(f"[✓] Загружено {len(points)} точек")
     except Exception as e:
-        print("❌ Ошибка при первичном обновлении:", e)
+        print("[!!] Ошибка обновления меток:", e)
 
 def update_points_loop():
     while True:
+        time.sleep(300)  # 5 минут
         update_points_once()
-        time.sleep(60)
 
 @app.route("/")
 def map_view():
+    print(f"[INFO] Карта запрошена. Всего точек: {len(cache_points)}")
     html_template = """
     <!DOCTYPE html>
     <html>
@@ -144,7 +139,8 @@ def map_view():
     return render_template_string(html_template, points=cache_points)
 
 if __name__ == "__main__":
-    update_points_once()  # сначала парсим
+    import os
+    update_points_once()  # сначала загружаем
     threading.Thread(target=update_points_loop, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
