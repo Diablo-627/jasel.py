@@ -39,7 +39,7 @@ def map_view():
             trash_type = row[3]
             details = row[4]
             url = row[5]
-            status = row[8].strip().lower()
+            status = row[9].strip().lower()
 
             row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}"
             row_hash = hashlib.md5(row_data.encode()).hexdigest()
