@@ -39,7 +39,7 @@ def map_view():
             trash_type = row[3]
             details = row[4]
             url = row[5]
-            photo_link = row[8].strip() if len(row) > 7 else ""
+            photo_link = row[7].strip() if len(row) > 7 else ""
             status = row[9].strip().lower() if len(row) > 9 else ""
 
             row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_link}"
