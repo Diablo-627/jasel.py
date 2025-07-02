@@ -38,7 +38,7 @@ def map_view():
             address = row[2]
             trash_type = row[3]
             details = row[4]
-            url = row[6]
+            url = row[5]
             photo_link = row[8].strip() if len(row) > 7 else ""
             status = row[9].strip().lower() if len(row) > 9 else ""
 
