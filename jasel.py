@@ -41,8 +41,9 @@ def map_view():
             url = row[5]
             photo_link = row[7].strip() if len(row) > 7 else ""
             status = row[9].strip().lower() if len(row) > 9 else ""
+            priority = row[10].strip().lower() if len(row) > 10 else ""
 
-            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_link}"
+            row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_link}|{priority}"
             row_hash = hashlib.md5(row_data.encode()).hexdigest()
 
             if row_hash in last_row_hashes:
@@ -64,11 +65,19 @@ def map_view():
             lon = float(match.group(1))
             lat = float(match.group(2))
 
-            color = "green" if status == "true" else "red"
+            # Цвет по статусу и приоритету
+            if status == "true":
+                color = "green"
+            elif priority == "true":
+                color = "orange"
+            else:
+                color = "red"
 
             info_html = f"👤 Координатор: {coordinator}<br>📍 Адрес: {address}<br>🧹 Мусор: {trash_type}<br>📦 Детали: {details}<br>🔗 <a href='{url}' target='_blank'>2ГИС</a>"
             if photo_link:
                 info_html += f"<br>📷 <a href='{photo_link}' target='_blank'>Фото</a>"
+            if priority == "true":
+                info_html += "<br>⭐ Приоритетная точка"
 
             points.append({
                 "lat": lat,
@@ -94,8 +103,16 @@ def map_view():
         <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBQok61N3EKdXRtH1PJm3Ol-VznF8-PgNo"></script>
         <style>
             #map { height: 600px; width: 100%; }
-            #controls { text-align:center; margin-bottom:10px; }
-            button, label { margin: 0 5px; }
+            #controls {
+                text-align: center;
+                margin-top: 15px;
+            }
+            button, label {
+                margin: 10px;
+                padding: 15px 20px;
+                font-size: 18px;
+                border-radius: 10px;
+            }
         </style>
         <script>
             let allMarkers = [];
@@ -132,10 +149,9 @@ def map_view():
                         }
                     });
 
-                    marker.priority = false;
+                    marker.priority = (pt.color === "orange");
                     marker.routeSelected = false;
                     marker.index = i;
-
                     marker.infoContent = pt.info;
 
                     marker.addListener('click', function() {
@@ -147,7 +163,6 @@ def map_view():
                             toggleRouteSelection(marker);
                             return;
                         }
-                        // Close previous infoWindow and open new one
                         infoWindow.close();
                         infoWindow.setContent(marker.infoContent);
                         infoWindow.open(map, marker);
@@ -287,8 +302,8 @@ def map_view():
             function toggleGreenMarkers() {
                 let checkbox = document.getElementById('greenToggle');
                 allMarkers.forEach(marker => {
-                    if(marker.priority) return; // priority always visible
-                    if(marker.routeSelected) return; // route selected always visible
+                    if(marker.priority) return;
+                    if(marker.routeSelected) return;
                     if(marker.getIcon().fillColor === "green" || marker.getIcon().fillColor === "#008000") {
                         marker.setVisible(checkbox.checked);
                     }
@@ -298,14 +313,14 @@ def map_view():
     </head>
     <body onload="initMap()">
         <h2 style="text-align:center;">🗺️ Карта точек вывоза (Жасыл Ел)</h2>
-        <div id="controls" style="text-align:center; margin-bottom:10px;">
-            <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label>
+        <div id="map"></div>
+        <div id="controls">
+            <label><input type="checkbox" id="greenToggle" checked onchange="toggleGreenMarkers()"> Показывать зелёные метки (вывезено)</label><br>
             <button id="priorityBtn" onclick="togglePriorityMode()">Назначить приоритет</button>
             <button id="routeSelectBtn" onclick="toggleRouteSelectionMode()">Выбрать точки маршрута</button>
             <button onclick="buildRoute()">Построить маршрут</button>
             <button onclick="resetMap()">Сбросить</button>
         </div>
-        <div id="map"></div>
     </body>
     </html>
     """
