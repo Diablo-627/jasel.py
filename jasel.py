@@ -28,21 +28,27 @@ def map_view():
         points = []
         processed = 0
         skipped = 0
+        requests_count = 0
+        MAX_REQUESTS = 10
 
         for row in rows:
             try:
-                if len(row) < 10 or not row[5].startswith("http"):
+                if len(row) < 6 or not isinstance(row[5], str) or not row[5].startswith("http"):
                     skipped += 1
                     continue
 
-                coordinator = row[1]
-                address = row[2]
-                trash_type = row[3]
-                details = row[4]
-                url = row[5]
+                coordinator = row[1].strip() if len(row) > 1 else ""
+                address = row[2].strip() if len(row) > 2 else ""
+                trash_type = row[3].strip() if len(row) > 3 else ""
+                details = row[4].strip() if len(row) > 4 else ""
+                url = row[5].strip()
                 photo_link = row[7].strip() if len(row) > 7 else ""
                 status = row[9].strip().lower() if len(row) > 9 else ""
                 priority = row[10].strip().lower() if len(row) > 10 else ""
+
+                if not coordinator and not address and not trash_type and not details:
+                    skipped += 1
+                    continue
 
                 row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_link}|{priority}"
                 row_hash = hashlib.md5(row_data.encode()).hexdigest()
@@ -50,9 +56,13 @@ def map_view():
                 if row_hash in last_row_hashes:
                     final_url = last_url_results[row_hash]
                 else:
+                    if requests_count >= MAX_REQUESTS:
+                        skipped += 1
+                        continue
                     try:
                         r = requests.get(url, allow_redirects=True, timeout=3)
                         final_url = r.url
+                        requests_count += 1
                     except requests.exceptions.RequestException as e:
                         print(f"[!] Ошибка при загрузке {url}: {e}")
                         skipped += 1
@@ -91,8 +101,7 @@ def map_view():
                 skipped += 1
                 continue
 
-        print(f"[INFO] Карта запрошена. Всего строк: {len(rows)} | Успешных точек: {processed} | Пропущено: {skipped}")
-
+        print(f"[INFO] Карта загружена: всего строк={len(rows)}, точек={processed}, пропущено={skipped}, запросов={requests_count}")
         return render_template_string(html_template, points=points)
 
     except Exception as e:
@@ -100,6 +109,7 @@ def map_view():
         import traceback
         print(traceback.format_exc())
         return "Внутренняя ошибка сервера", 500
+
 
 html_template = """
 <!DOCTYPE html>
@@ -134,7 +144,6 @@ html_template = """
             });
 
             var points = {{ points | safe }};
-
             infoWindow = new google.maps.InfoWindow();
 
             for (let i = 0; i < points.length; i++) {
