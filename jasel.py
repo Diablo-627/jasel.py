@@ -50,9 +50,16 @@ def map_view():
                 final_url = last_url_results[row_hash]
             else:
                 try:
-                    r = requests.get(url, allow_redirects=True, timeout=6)
+                    row_data = f"{coordinator}|{address}|{trash_type}|{details}|{url}|{status}|{photo_link}|{priority}"
+            row_hash = hashlib.md5(row_data.encode()).hexdigest()
+
+            if row_hash in last_row_hashes:
+                final_url = last_url_results[row_hash]
+            else:
+                try:
+                    r = requests.get(url, allow_redirects=True, timeout=3)
                     final_url = r.url
-                except Exception as e:
+                except requests.exceptions.RequestException as e:
                     print(f"[!] Ошибка при загрузке {url}: {e}")
                     skipped += 1
                     continue
