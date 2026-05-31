@@ -12,7 +12,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_name("/etc/secrets/your_key.
 client = gspread.authorize(creds)
 
 SPREADSHEET_KEY = "1qZfhq1E9CzxWv1tUUDDr4dVDfu4cZ53pEA2lESkVW1E"
-SHEET_NAME = "АДРЕСА"
+SHEET_NAME = "АДРЕСА2026"
 
 last_row_hashes = {}
 last_url_results = {}
